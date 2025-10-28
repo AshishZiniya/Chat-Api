@@ -18,7 +18,7 @@ async function bootstrap() {
       allowedHeaders: ['Content-Type', 'Authorization'],
     }),
   );
-  await app.listen(3001);
+  await app.listen(process.env.PORT || 10000);
   console.log('NestJS chat server listening on http://localhost:3001');
 }
 void bootstrap();
