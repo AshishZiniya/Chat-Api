@@ -11,6 +11,13 @@ import { AuthModule } from './auth/auth.module';
   imports: [
     MongooseModule.forRoot(
       process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/chat',
+      {
+        serverApi: {
+          version: '1',
+          strict: true,
+          deprecationErrors: true,
+        },
+      },
     ),
     UsersModule,
     MessagesModule,
