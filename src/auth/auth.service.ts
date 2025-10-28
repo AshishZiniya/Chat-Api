@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import * as jwt from 'jsonwebtoken';
 
@@ -57,10 +61,24 @@ export class AuthService {
     };
   }
   async register(username: string, password: string, avatar?: string) {
+    // Validate input
+    if (!username || !password) {
+      throw new BadRequestException('Username and password are required');
+    }
+    if (username.length < 3) {
+      throw new BadRequestException(
+        'Username must be at least 3 characters long',
+      );
+    }
+    if (password.length < 6) {
+      throw new BadRequestException(
+        'Password must be at least 6 characters long',
+      );
+    }
     // Check if user exists
     const existing = await this.usersService.findByUsername(username);
     if (existing) {
-      throw new UnauthorizedException('Username already taken');
+      throw new BadRequestException('Username already taken');
     }
     // Create user
     const user = await this.usersService.create(username, password, avatar);

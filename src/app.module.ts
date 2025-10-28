@@ -5,8 +5,7 @@ import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { MessagesModule } from './messages/messages.module';
 import { ChatGateway } from './chat.gateway';
-import { AuthController } from './auth/auth.controller';
-import { AuthService } from './auth/auth.service';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -15,8 +14,9 @@ import { AuthService } from './auth/auth.service';
     ),
     UsersModule,
     MessagesModule,
+    AuthModule,
   ],
-  controllers: [AppController, AuthController],
-  providers: [AppService, AuthService, ChatGateway],
+  controllers: [AppController],
+  providers: [AppService, ChatGateway],
 })
 export class AppModule {}

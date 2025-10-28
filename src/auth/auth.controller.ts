@@ -1,11 +1,4 @@
-import {
-  Controller,
-  Post,
-  Body,
-  HttpCode,
-  HttpStatus,
-  BadRequestException,
-} from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { AuthService } from './auth.service';
 
 @Controller('auth')
@@ -23,9 +16,6 @@ export class AuthController {
   async register(
     @Body() body: { username: string; password: string; avatar?: string },
   ) {
-    if (!body.username || !body.password) {
-      throw new BadRequestException('Username and password are required');
-    }
     return this.auth.register(body.username, body.password, body.avatar);
   }
 }
