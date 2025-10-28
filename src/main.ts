@@ -9,6 +9,7 @@ async function bootstrap() {
     origin: true,
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    domain: [process.env.FRONTEND_URL, 'localhost'],
   });
   await app.listen(3001);
   console.log('NestJS chat server listening on http://localhost:3001');
