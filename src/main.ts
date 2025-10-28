@@ -19,6 +19,8 @@ async function bootstrap() {
     }),
   );
   await app.listen(process.env.PORT || 10000);
-  console.log('NestJS chat server listening on http://localhost:3001');
+  console.log(
+    `NestJS chat server listening on http://localhost:${process.env.PORT || 10000}`,
+  );
 }
 void bootstrap();
