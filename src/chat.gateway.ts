@@ -1,0 +1,238 @@
+import {
+  WebSocketGateway,
+  SubscribeMessage,
+  OnGatewayInit,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  WebSocketServer,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import * as jwt from 'jsonwebtoken';
+import { UsersService } from './users/users.service';
+import { MessagesService } from './messages/messages.service';
+import { Injectable } from '@nestjs/common';
+
+interface ConnectedUser {
+  socketId: string;
+  userId: string;
+  username: string;
+  avatar?: string;
+}
+
+@Injectable()
+@WebSocketGateway({ cors: { origin: '*', credentials: true } })
+export class ChatGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  @WebSocketServer() server: Server;
+  private connected = new Map<string, ConnectedUser>(); // userId -> ConnectedUser
+
+  constructor(
+    private usersService: UsersService,
+    private messagesService: MessagesService,
+  ) {}
+
+  afterInit(_server: Server) {
+    void _server;
+    // no-op
+  }
+
+  async handleConnection(client: Socket) {
+    try {
+      let token: string | undefined;
+      if (
+        client.handshake.auth &&
+        typeof client.handshake.auth.token === 'string'
+      ) {
+        token = client.handshake.auth.token.replace('Bearer ', '');
+      } else if (
+        typeof client.handshake.headers['authorization'] === 'string'
+      ) {
+        token = client.handshake.headers['authorization'].replace(
+          'Bearer ',
+          '',
+        );
+      }
+      if (!token) {
+        client.disconnect(true);
+        return;
+      }
+      const payload = jwt.verify(
+        token,
+        process.env.JWT_SECRET || 'dev_secret',
+      ) as { sub: string };
+      const userId = payload.sub;
+      const user = await this.usersService.findById(userId);
+      if (!user) {
+        client.disconnect(true);
+        return;
+      }
+
+      this.connected.set(String(userId), {
+        socketId: client.id,
+        userId: String(userId),
+        username: user.username,
+        avatar: user.avatar,
+      });
+      await this.usersService.setOnline(userId, true);
+
+      // broadcast updated user list
+      this.server.emit('users:updated', await this.usersService.listAll());
+
+      // deliver pending messages
+      const pending = await this.messagesService.getPendingFor(String(userId));
+      if (pending.length) {
+        client.emit('messages:pending', pending);
+        await this.messagesService.markDelivered(
+          pending
+            .map((p) => {
+              if (typeof p._id === 'string') {
+                return p._id;
+              }
+              if (
+                typeof p._id === 'object' &&
+                p._id !== null &&
+                typeof (p._id as { toHexString?: unknown }).toHexString ===
+                  'function'
+              ) {
+                return (p._id as { toHexString: () => string }).toHexString();
+              }
+              return '';
+            })
+            .filter((id): id is string => !!id),
+        );
+      }
+    } catch {
+      client.disconnect(true);
+    }
+  }
+
+  async handleDisconnect(client: Socket) {
+    // find user by socket
+    for (const [userId, info] of this.connected.entries()) {
+      if (info.socketId === client.id) {
+        this.connected.delete(userId);
+        await this.usersService.setOnline(userId, false);
+        this.server.emit('users:updated', await this.usersService.listAll());
+        break;
+      }
+    }
+  }
+
+  @SubscribeMessage('typing')
+  handleTyping(
+    @MessageBody() payload: { to: string; typing: boolean },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+    const toConn = this.connected.get(payload.to);
+    if (toConn)
+      this.server.to(toConn.socketId).emit('typing', {
+        from: fromUser.userId,
+        username: fromUser.username,
+        typing: payload.typing,
+      });
+  }
+
+  @SubscribeMessage('message')
+  async handleMessage(
+    @MessageBody() payload: { to: string; text: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+    // store message
+    const saved = await this.messagesService.save(
+      fromUser.userId,
+      payload.to,
+      payload.text,
+    );
+
+    // send to receiver if online
+    const toConn = this.connected.get(payload.to);
+    const data = {
+      _id: saved._id,
+      from: fromUser.userId,
+      to: payload.to,
+      text: payload.text,
+      createdAt: saved.createdAt,
+      avatar: fromUser.avatar,
+      username: fromUser.username,
+    };
+
+    // emit to both: sender and receiver
+    client.emit('message', data);
+    if (toConn) {
+      this.server.to(toConn.socketId).emit('message', data);
+      await this.messagesService.markDelivered([String(saved._id)]);
+    }
+  }
+
+  @SubscribeMessage('get:conversation')
+  async handleGetConversation(
+    @MessageBody() payload: { withUserId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+    const conv = await this.messagesService.getConversation(
+      fromUser.userId,
+      payload.withUserId,
+    );
+    client.emit('conversation', conv);
+  }
+
+  @SubscribeMessage('delete:message')
+  async handleDeleteMessage(
+    @MessageBody() payload: { id: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+
+    const msg = await this.messagesService.findById(payload.id);
+    if (!msg) return;
+
+    // Allow both sender and receiver to delete the message
+    if (
+      String(msg.from) !== String(fromUser.userId) &&
+      String(msg.to) !== String(fromUser.userId)
+    )
+      return;
+
+    // Mark the message as deleted
+    await this.messagesService.markDeleted(payload.id, fromUser.userId);
+
+    // If sender is deleting, notify both participants
+    if (String(msg.from) === String(fromUser.userId)) {
+      const toConn = this.connected.get(String(msg.to));
+      client.emit('message:deleted', {
+        id: payload.id,
+        deletedBy: fromUser.userId,
+      });
+      if (toConn) {
+        this.server.to(toConn.socketId).emit('message:deleted', {
+          id: payload.id,
+          deletedBy: fromUser.userId,
+        });
+      }
+    } else {
+      // If receiver is deleting, only notify the receiver
+      client.emit('message:deleted', {
+        id: payload.id,
+        deletedBy: fromUser.userId,
+      });
+    }
+  }
+}
