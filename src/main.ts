@@ -18,7 +18,11 @@ async function bootstrap() {
     origin: [...origins],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Access-Control-Allow-Origin',
+    ],
   });
   await app.listen(port, () => {
     console.log(`NestJS chat server listening on http://localhost:${port}`);
