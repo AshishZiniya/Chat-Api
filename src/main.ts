@@ -3,6 +3,8 @@ import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 
+const port = process.env.PORT || 10000;
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.use(cookieParser());
@@ -18,9 +20,7 @@ async function bootstrap() {
       allowedHeaders: ['Content-Type', 'Authorization'],
     }),
   );
-  await app.listen(process.env.PORT || 10000);
-  console.log(
-    `NestJS chat server listening on http://localhost:${process.env.PORT || 10000}`,
-  );
+  await app.listen(port);
+  console.log(`NestJS chat server listening on http://localhost:${port}`);
 }
 void bootstrap();
