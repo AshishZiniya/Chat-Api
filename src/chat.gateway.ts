@@ -13,6 +13,7 @@ import * as jwt from 'jsonwebtoken';
 import { UsersService } from './users/users.service';
 import { MessagesService } from './messages/messages.service';
 import { Injectable } from '@nestjs/common';
+import { MessageDoc } from './messages/messages.schema';
 
 interface ConnectedUser {
   socketId: string;
@@ -141,26 +142,58 @@ export class ChatGateway
 
   @SubscribeMessage('message')
   async handleMessage(
-    @MessageBody() payload: { to: string; text: string },
+    @MessageBody() payload: { to: string; text: string; type?: string },
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
       (c) => c.socketId === client.id,
     );
     if (!fromUser) return;
-    // store message
-    const saved = await this.messagesService.save(
-      fromUser.userId,
-      payload.to,
-      payload.text,
-    );
+
+    let saved: MessageDoc;
+    const type = payload.type || 'text';
+
+    // store message based on type
+    if (type === 'text') {
+      saved = await this.messagesService.save(
+        fromUser.userId,
+        payload.to,
+        payload.text,
+      );
+    } else if (type === 'emoji') {
+      saved = await this.messagesService.saveEmoji(
+        fromUser.userId,
+        payload.to,
+        payload.text,
+      );
+    } else if (type === 'gif') {
+      saved = await this.messagesService.saveGif(
+        fromUser.userId,
+        payload.to,
+        payload.text,
+      );
+    } else if (type === 'sticker') {
+      saved = await this.messagesService.saveSticker(
+        fromUser.userId,
+        payload.to,
+        payload.text,
+      );
+    } else {
+      // For other types, save as text for now
+      saved = await this.messagesService.save(
+        fromUser.userId,
+        payload.to,
+        payload.text,
+      );
+    }
 
     // send to receiver if online
     const toConn = this.connected.get(payload.to);
     const data = {
-      _id: saved._id,
+      _id: saved?._id,
       from: fromUser.userId,
       to: payload.to,
+      type,
       text: payload.text,
       createdAt: saved.createdAt,
       avatar: fromUser.avatar,
@@ -168,6 +201,99 @@ export class ChatGateway
     };
 
     // emit to both: sender and receiver
+    client.emit('message', data);
+    if (toConn) {
+      this.server.to(toConn.socketId).emit('message', data);
+      await this.messagesService.markDelivered([String(saved._id)]);
+    }
+  }
+
+  @SubscribeMessage('location')
+  async handleLocation(
+    @MessageBody()
+    payload: {
+      to: string;
+      latitude: number;
+      longitude: number;
+      isLive?: boolean;
+    },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+
+    const saved = await this.messagesService.saveLocation(
+      fromUser.userId,
+      payload.to,
+      payload.latitude,
+      payload.longitude,
+      payload.isLive || false,
+    );
+
+    const toConn = this.connected.get(payload.to);
+    const data = {
+      _id: saved._id,
+      from: fromUser.userId,
+      to: payload.to,
+      type: 'location',
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      isLive: payload.isLive || false,
+      createdAt: saved.createdAt,
+      avatar: fromUser.avatar,
+      username: fromUser.username,
+    };
+
+    client.emit('message', data);
+    if (toConn) {
+      this.server.to(toConn.socketId).emit('message', data);
+      await this.messagesService.markDelivered([String(saved._id)]);
+    }
+  }
+
+  @SubscribeMessage('webview')
+  async handleWebView(
+    @MessageBody()
+    payload: {
+      to: string;
+      url: string;
+      title?: string;
+      description?: string;
+      imageUrl?: string;
+    },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+
+    const saved = await this.messagesService.saveWebView(
+      fromUser.userId,
+      payload.to,
+      payload.url,
+      payload.title,
+      payload.description,
+      payload.imageUrl,
+    );
+
+    const toConn = this.connected.get(payload.to);
+    const data = {
+      _id: saved._id,
+      from: fromUser.userId,
+      to: payload.to,
+      type: 'webview',
+      webUrl: payload.url,
+      webTitle: payload.title,
+      webDescription: payload.description,
+      webImageUrl: payload.imageUrl,
+      createdAt: saved.createdAt,
+      avatar: fromUser.avatar,
+      username: fromUser.username,
+    };
+
     client.emit('message', data);
     if (toConn) {
       this.server.to(toConn.socketId).emit('message', data);

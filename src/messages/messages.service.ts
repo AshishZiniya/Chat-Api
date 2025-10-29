@@ -9,9 +9,29 @@ export class MessagesService {
     @InjectModel(Message.name) private messageModel: Model<MessageDoc>,
   ) {}
 
-  async save(from: string, to: string, text: string) {
+  async save(from: string, to: string, text: string): Promise<MessageDoc> {
     const m = new this.messageModel({ from, to, text });
-    return m.save();
+    return m.save() as Promise<MessageDoc>;
+  }
+
+  async saveFile(
+    from: string,
+    to: string,
+    fileUrl: string,
+    fileName: string,
+    fileSize: number,
+    fileType: string,
+  ): Promise<MessageDoc> {
+    const m = new this.messageModel({
+      from,
+      to,
+      type: 'file',
+      fileUrl,
+      fileName,
+      fileSize,
+      fileType,
+    });
+    return m.save() as Promise<MessageDoc>;
   }
 
   async getConversation(a: string, b: string) {
@@ -66,5 +86,81 @@ export class MessagesService {
     return this.messageModel
       .updateMany({ _id: { $in: messageIds } }, { $set: { delivered: true } })
       .exec();
+  }
+
+  async saveLocation(
+    from: string,
+    to: string,
+    latitude: number,
+    longitude: number,
+    isLive: boolean = false,
+  ): Promise<MessageDoc> {
+    const m = new this.messageModel({
+      from,
+      to,
+      type: 'location',
+      latitude,
+      longitude,
+      isLive,
+    });
+    return m.save() as Promise<MessageDoc>;
+  }
+
+  async saveEmoji(
+    from: string,
+    to: string,
+    emoji: string,
+  ): Promise<MessageDoc> {
+    const m = new this.messageModel({
+      from,
+      to,
+      type: 'emoji',
+      text: emoji,
+    });
+    return m.save() as Promise<MessageDoc>;
+  }
+
+  async saveGif(from: string, to: string, gifUrl: string): Promise<MessageDoc> {
+    const m = new this.messageModel({
+      from,
+      to,
+      type: 'gif',
+      text: gifUrl,
+    });
+    return m.save() as Promise<MessageDoc>;
+  }
+
+  async saveSticker(
+    from: string,
+    to: string,
+    stickerUrl: string,
+  ): Promise<MessageDoc> {
+    const m = new this.messageModel({
+      from,
+      to,
+      type: 'sticker',
+      text: stickerUrl,
+    });
+    return m.save() as Promise<MessageDoc>;
+  }
+
+  async saveWebView(
+    from: string,
+    to: string,
+    url: string,
+    title?: string,
+    description?: string,
+    imageUrl?: string,
+  ) {
+    const m = new this.messageModel({
+      from,
+      to,
+      type: 'webview',
+      webUrl: url,
+      webTitle: title,
+      webDescription: description,
+      webImageUrl: imageUrl,
+    });
+    return m.save();
   }
 }
