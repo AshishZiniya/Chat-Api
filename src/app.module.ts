@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -9,9 +10,11 @@ import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
     MongooseModule.forRoot(
-      process.env.MONGO_URI ||
-        `mongodb+srv://AshishZiniya:${process.env.DB_PASS}@cluster37471.rdwqvaf.mongodb.net/Chat?appName=Cluster37471`,
+      process.env.MONGO_URI || 'mongodb://localhost:27017/chat',
       {
         serverApi: {
           version: '1',
