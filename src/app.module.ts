@@ -10,7 +10,8 @@ import { AuthModule } from './auth/auth.module';
 @Module({
   imports: [
     MongooseModule.forRoot(
-      process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/chat',
+      process.env.MONGO_URI ||
+        `mongodb+srv://AshishZiniya:${process.env.DB_PASS}@cluster37471.rdwqvaf.mongodb.net/Chat?appName=Cluster37471`,
       {
         serverApi: {
           version: '1',
