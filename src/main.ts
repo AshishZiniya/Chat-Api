@@ -14,13 +14,14 @@ async function bootstrap() {
   }
   app.use(
     cors({
-      origin: origins,
+      origin: [...origins],
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
     }),
   );
-  await app.listen(port);
-  console.log(`NestJS chat server listening on http://localhost:${port}`);
+  await app.listen(port, () => {
+    console.log(`NestJS chat server listening on http://localhost:${port}`);
+  });
 }
 void bootstrap();
