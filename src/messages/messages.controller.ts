@@ -21,7 +21,7 @@ export class MessagesController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads',
+        destination: '/tmp',
         filename: (req, file, callback) => {
           const uniqueSuffix =
             Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -44,7 +44,7 @@ export class MessagesController {
       throw new Error('No file uploaded');
     }
 
-    const fileUrl = `/uploads/${file.filename}`;
+    const fileUrl = `/tmp/${file.filename}`;
     const message = await this.messagesService.saveFile(
       body.from,
       body.to,

@@ -1,7 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
-import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
 
 const port = process.env.PORT || 10000;
@@ -26,8 +25,8 @@ async function bootstrap() {
       'Access-Control-Allow-Origin',
     ],
   });
-  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-    prefix: '/uploads/',
+  app.useStaticAssets('/tmp', {
+    prefix: '/tmp/',
   });
   await app.listen(port, () => {
     console.log(`NestJS chat server listening on http://localhost:${port}`);
