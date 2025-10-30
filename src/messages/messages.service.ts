@@ -97,6 +97,46 @@ export class MessagesService {
       .then((messages) => messages.reverse()); // Reverse to show chronological order
   }
 
+  async searchConversation(
+    a: string,
+    b: string,
+    query: string,
+    limit: number = 50,
+    skip: number = 0,
+  ) {
+    const userA = new Types.ObjectId(a);
+    const userB = new Types.ObjectId(b);
+
+    return this.messageModel
+      .find({
+        $and: [
+          {
+            $or: [
+              { from: userA, to: userB },
+              { from: userB, to: userA },
+            ],
+          },
+          {
+            deletedBy: { $nin: [userA] }, // Don't show messages deleted by the requesting user
+          },
+          {
+            $or: [
+              { text: { $regex: query, $options: 'i' } },
+              { fileName: { $regex: query, $options: 'i' } },
+            ],
+          },
+        ],
+      })
+      .populate('from', 'username avatar online')
+      .populate('to', 'username avatar online')
+      .populate('replyId', 'text type from createdAt')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .then((messages) => messages.reverse());
+  }
+
   async getPendingFor(userId: string, limit: number = 20) {
     const userObjectId = new Types.ObjectId(userId);
 

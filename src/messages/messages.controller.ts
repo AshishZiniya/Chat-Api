@@ -1,10 +1,12 @@
 import {
   Controller,
   Post,
+  Get,
   UseInterceptors,
   UploadedFile,
   Body,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -131,5 +133,45 @@ export class MessagesController {
       body.imageUrl,
     );
     return { message };
+  }
+
+  @Get('conversation')
+  async getConversation(
+    @Query('userA') userA: string,
+    @Query('userB') userB: string,
+    @Query('limit') limit?: string,
+    @Query('skip') skip?: string,
+  ) {
+    const limitNum = limit ? parseInt(limit, 10) : 50;
+    const skipNum = skip ? parseInt(skip, 10) : 0;
+
+    const messages = await this.messagesService.getConversation(
+      userA,
+      userB,
+      limitNum,
+      skipNum,
+    );
+    return { messages };
+  }
+
+  @Get('conversation/search')
+  async searchConversation(
+    @Query('userA') userA: string,
+    @Query('userB') userB: string,
+    @Query('query') query: string,
+    @Query('limit') limit?: string,
+    @Query('skip') skip?: string,
+  ) {
+    const limitNum = limit ? parseInt(limit, 10) : 50;
+    const skipNum = skip ? parseInt(skip, 10) : 0;
+
+    const messages = await this.messagesService.searchConversation(
+      userA,
+      userB,
+      query,
+      limitNum,
+      skipNum,
+    );
+    return { messages };
   }
 }
