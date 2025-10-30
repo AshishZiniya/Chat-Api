@@ -9,8 +9,13 @@ import {
   UseGuards,
   Request,
 } from '@nestjs/common';
+import { Request as ExpressRequest } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { GroupsService } from './groups.service';
+
+interface AuthenticatedRequest extends ExpressRequest {
+  user: { userId: string; username: string };
+}
 
 @Controller('groups')
 @UseGuards(JwtAuthGuard)
@@ -20,7 +25,7 @@ export class GroupsController {
   @Post()
   async createGroup(
     @Body() body: { name: string; description?: string; members?: string[] },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const userId = req.user.userId;
     return this.groupsService.createGroup(
@@ -32,7 +37,7 @@ export class GroupsController {
   }
 
   @Get()
-  async getUserGroups(@Request() req: any) {
+  async getUserGroups(@Request() req: AuthenticatedRequest) {
     const userId = req.user.userId;
     return this.groupsService.getUserGroups(userId);
   }
@@ -46,7 +51,7 @@ export class GroupsController {
   async addMember(
     @Param('id') groupId: string,
     @Body() body: { userId: string },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const addedBy = req.user.userId;
     return this.groupsService.addMember(groupId, body.userId, addedBy);
@@ -56,7 +61,7 @@ export class GroupsController {
   async removeMember(
     @Param('id') groupId: string,
     @Param('userId') userId: string,
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const removedBy = req.user.userId;
     return this.groupsService.removeMember(groupId, userId, removedBy);
@@ -66,14 +71,17 @@ export class GroupsController {
   async updateGroup(
     @Param('id') groupId: string,
     @Body() updates: { name?: string; description?: string; avatar?: string },
-    @Request() req: any,
+    @Request() req: AuthenticatedRequest,
   ) {
     const updatedBy = req.user.userId;
     return this.groupsService.updateGroup(groupId, updates, updatedBy);
   }
 
   @Delete(':id')
-  async deleteGroup(@Param('id') groupId: string, @Request() req: any) {
+  async deleteGroup(
+    @Param('id') groupId: string,
+    @Request() req: AuthenticatedRequest,
+  ) {
     const deletedBy = req.user.userId;
     await this.groupsService.deleteGroup(groupId, deletedBy);
     return { message: 'Group deleted successfully' };
