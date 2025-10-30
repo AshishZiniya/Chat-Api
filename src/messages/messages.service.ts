@@ -317,4 +317,27 @@ export class MessagesService {
 
     return message.save();
   }
+
+  async getRecentDeletionsForUser(userId: string, since?: Date) {
+    const userObjectId = new Types.ObjectId(userId);
+    const cutoffDate = since || new Date(Date.now() - 24 * 60 * 60 * 1000); // Last 24 hours
+
+    // Find messages that were deleted recently and involve this user
+    return this.messageModel
+      .find({
+        $or: [{ from: userObjectId }, { to: userObjectId }],
+        deletedBy: { $exists: true, $ne: [] },
+        updatedAt: { $gte: cutoffDate },
+      })
+      .select('_id from to deletedBy updatedAt')
+      .lean()
+      .then((messages) =>
+        messages.map((msg) => ({
+          messageId: msg._id.toString(),
+          deletedBy: (msg.deletedBy || []).map((id) => id.toString()),
+          conversationId: `${msg.from.toString()}-${msg.to.toString()}`,
+          deletedAt: msg.updatedAt,
+        })),
+      );
+  }
 }

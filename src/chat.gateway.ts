@@ -105,6 +105,25 @@ export class ChatGateway
             .filter((id): id is string => !!id),
         );
       }
+
+      // Send any recent deletions that occurred while user was offline
+      // This ensures multi-device synchronization
+      try {
+        const recentDeletions =
+          await this.messagesService.getRecentDeletionsForUser(String(userId));
+        if (recentDeletions && recentDeletions.length) {
+          for (const deletion of recentDeletions) {
+            client.emit('message:deleted', {
+              id: String(deletion.messageId),
+              deletedBy: deletion.deletedBy,
+              conversationId: deletion.conversationId,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error sending recent deletions:', error);
+        // Continue with connection - don't fail the entire connection
+      }
     } catch {
       client.disconnect(true);
     }
@@ -369,29 +388,30 @@ export class ChatGateway
         return;
       }
 
-      // Mark the message as deleted
+      // Mark the message as deleted in database
       await this.messagesService.markDeleted(payload.id, fromUser.userId);
 
-      // If sender is deleting, notify both participants
-      if (fromId === fromUser.userId) {
-        const toConn = this.connected.get(toId);
-        client.emit('message:deleted', {
-          id: payload.id,
-          deletedBy: fromUser.userId,
-        });
-        if (toConn) {
-          this.server.to(toConn.socketId).emit('message:deleted', {
+      // Broadcast deletion to ALL connected clients in the conversation
+      // Find all connected clients that are part of this conversation
+      const conversationParticipants = [fromId, toId];
+
+      for (const participantId of conversationParticipants) {
+        const participantConn = this.connected.get(participantId);
+        if (participantConn) {
+          this.server.to(participantConn.socketId).emit('message:deleted', {
             id: payload.id,
             deletedBy: fromUser.userId,
+            conversationId: `${fromId}-${toId}`, // Include conversation identifier
           });
         }
-      } else {
-        // If receiver is deleting, only notify the receiver
-        client.emit('message:deleted', {
-          id: payload.id,
-          deletedBy: fromUser.userId,
-        });
       }
+
+      // Also emit to the sender's client for consistency
+      client.emit('message:deleted', {
+        id: payload.id,
+        deletedBy: fromUser.userId,
+        conversationId: `${fromId}-${toId}`,
+      });
     } catch (error) {
       client.emit('error', {
         message:
