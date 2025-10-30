@@ -4,11 +4,19 @@ import * as webpush from 'web-push';
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   onModuleInit() {
+    const publicKey = process.env.VAPID_PUBLIC_KEY;
+    const privateKey = process.env.VAPID_PRIVATE_KEY;
+
+    if (!publicKey || !privateKey) {
+      console.warn('VAPID keys not set. Push notifications will not work.');
+      return;
+    }
+
     try {
       webpush.setVapidDetails(
         'mailto:admin@chatapp.com',
-        process.env.VAPID_PUBLIC_KEY || 'default_public_key',
-        process.env.VAPID_PRIVATE_KEY || 'default_private_key',
+        publicKey,
+        privateKey,
       );
     } catch (error) {
       console.error('Failed to set VAPID details:', error);
@@ -16,7 +24,10 @@ export class NotificationsService implements OnModuleInit {
     }
   }
 
-  async sendPushNotification(subscription: any, payload: any) {
+  async sendPushNotification(
+    subscription: webpush.PushSubscription,
+    payload: any,
+  ) {
     try {
       await webpush.sendNotification(subscription, JSON.stringify(payload));
     } catch (error) {
@@ -28,7 +39,7 @@ export class NotificationsService implements OnModuleInit {
     userId: string,
     senderName: string,
     message: string,
-    subscription?: any,
+    subscription?: webpush.PushSubscription,
   ) {
     const payload = {
       title: `New message from ${senderName}`,
@@ -50,7 +61,7 @@ export class NotificationsService implements OnModuleInit {
     groupName: string,
     senderName: string,
     message: string,
-    subscriptions: any[],
+    subscriptions: webpush.PushSubscription[],
   ) {
     const payload = {
       title: `New message in ${groupName}`,
