@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { MulterModule } from '@nestjs/platform-express';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
@@ -23,6 +24,9 @@ import { AuthModule } from './auth/auth.module';
         },
       },
     ),
+    MulterModule.register({
+      dest: '/tmp',
+    }),
     UsersModule,
     MessagesModule,
     AuthModule,

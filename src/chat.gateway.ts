@@ -142,7 +142,15 @@ export class ChatGateway
 
   @SubscribeMessage('message')
   async handleMessage(
-    @MessageBody() payload: { to: string; text: string; type?: string },
+    @MessageBody()
+    payload: {
+      to: string;
+      text: string;
+      type?: string;
+      fileName?: string;
+      fileSize?: number;
+      fileType?: string;
+    },
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -178,6 +186,15 @@ export class ChatGateway
         payload.to,
         payload.text,
       );
+    } else if (type === 'file') {
+      saved = await this.messagesService.saveFile(
+        fromUser.userId,
+        payload.to,
+        payload.text, // fileUrl
+        payload.fileName || 'file',
+        payload.fileSize || 0,
+        payload.fileType || 'application/octet-stream',
+      );
     } else {
       // For other types, save as text for now
       saved = await this.messagesService.save(
@@ -195,6 +212,9 @@ export class ChatGateway
       to: payload.to,
       type,
       text: payload.text,
+      fileName: payload.fileName,
+      fileSize: payload.fileSize,
+      fileType: payload.fileType,
       createdAt: saved.createdAt,
       avatar: fromUser.avatar,
       username: fromUser.username,
