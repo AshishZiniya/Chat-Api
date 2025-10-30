@@ -1,7 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { Message, MessageDoc } from './messages.schema';
+import { Model, Types } from 'mongoose';
+import { Message, MessageDoc, MessageType } from './messages.schema';
 
 @Injectable()
 export class MessagesService {
@@ -9,9 +13,27 @@ export class MessagesService {
     @InjectModel(Message.name) private messageModel: Model<MessageDoc>,
   ) {}
 
-  async save(from: string, to: string, text: string): Promise<MessageDoc> {
-    const m = new this.messageModel({ from, to, text });
-    return m.save() as Promise<MessageDoc>;
+  async save(
+    from: string,
+    to: string,
+    text: string,
+    type: MessageType = MessageType.TEXT,
+  ): Promise<MessageDoc> {
+    if (!text?.trim()) {
+      throw new BadRequestException('Message text cannot be empty');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      text: text.trim(),
+      type,
+    });
+
+    return message.save();
   }
 
   async saveFile(
@@ -22,69 +44,116 @@ export class MessagesService {
     fileSize: number,
     fileType: string,
   ): Promise<MessageDoc> {
-    const m = new this.messageModel({
-      from,
-      to,
-      type: 'file',
+    if (!fileUrl || !fileName || fileSize <= 0) {
+      throw new BadRequestException('Invalid file data provided');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      type: MessageType.FILE,
       fileUrl,
       fileName,
       fileSize,
       fileType,
     });
-    return m.save() as Promise<MessageDoc>;
+
+    return message.save();
   }
 
-  async getConversation(a: string, b: string) {
+  async getConversation(
+    a: string,
+    b: string,
+    limit: number = 50,
+    skip: number = 0,
+  ) {
+    const userA = new Types.ObjectId(a);
+    const userB = new Types.ObjectId(b);
+
     return this.messageModel
       .find({
         $and: [
           {
             $or: [
-              { from: a, to: b },
-              { from: b, to: a },
+              { from: userA, to: userB },
+              { from: userB, to: userA },
             ],
           },
           {
-            deletedBy: { $nin: [a] }, // Don't show messages deleted by the requesting user
+            deletedBy: { $nin: [userA] }, // Don't show messages deleted by the requesting user
           },
         ],
       })
-      .sort({ createdAt: 1 })
-      .lean();
+      .populate('from', 'username avatar online')
+      .populate('to', 'username avatar online')
+      .populate('replyId', 'text type from createdAt')
+      .sort({ createdAt: -1 }) // Get latest first for pagination
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .then((messages) => messages.reverse()); // Reverse to show chronological order
   }
 
-  async getPendingFor(userId: string) {
+  async getPendingFor(userId: string, limit: number = 20) {
+    const userObjectId = new Types.ObjectId(userId);
+
     return this.messageModel
       .find({
-        to: userId,
+        to: userObjectId,
         delivered: false,
-        deletedBy: { $nin: [userId] }, // Don't include messages deleted by the receiver
+        deletedBy: { $nin: [userObjectId] }, // Don't include messages deleted by the receiver
       })
-      .lean();
+      .populate('from', 'username avatar online')
+      .populate('to', 'username avatar online')
+      .populate('replyId', 'text type from createdAt')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean()
+      .then((messages) => messages.reverse());
   }
 
   async markDeleted(id: string, userId: string) {
     const message = await this.findById(id);
-    if (!message) return null;
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    const messageId = new Types.ObjectId(id);
+    const userObjectId = new Types.ObjectId(userId);
+
+    // Verify user has permission to delete this message
+    const fromId =
+      typeof message.from === 'string' ? message.from : message.from.toString();
+    const toId =
+      typeof message.to === 'string' ? message.to : message.to.toString();
+
+    if (fromId !== userId && toId !== userId) {
+      throw new BadRequestException('You can only delete your own messages');
+    }
 
     // If sender is deleting, delete the message completely
-    if (message.from === userId) {
-      return this.messageModel.deleteOne({ _id: id }).exec();
+    if (fromId === userId) {
+      return this.messageModel.deleteOne({ _id: messageId }).exec();
     }
 
     // If receiver is deleting, only mark as deleted for receiver
     return this.messageModel
-      .updateOne({ _id: id }, { $addToSet: { deletedBy: userId } })
+      .updateOne({ _id: messageId }, { $addToSet: { deletedBy: userObjectId } })
       .exec();
   }
 
   async findById(id: string) {
-    return this.messageModel.findById(id).lean();
+    const messageId = new Types.ObjectId(id);
+    return this.messageModel.findById(messageId).lean();
   }
 
   async markDelivered(messageIds: string[]) {
+    const objectIds = messageIds.map((id) => new Types.ObjectId(id));
     return this.messageModel
-      .updateMany({ _id: { $in: messageIds } }, { $set: { delivered: true } })
+      .updateMany({ _id: { $in: objectIds } }, { $set: { delivered: true } })
       .exec();
   }
 
@@ -95,15 +164,28 @@ export class MessagesService {
     longitude: number,
     isLive: boolean = false,
   ): Promise<MessageDoc> {
-    const m = new this.messageModel({
-      from,
-      to,
-      type: 'location',
+    if (
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      throw new BadRequestException('Invalid coordinates provided');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      type: MessageType.LOCATION,
       latitude,
       longitude,
       isLive,
     });
-    return m.save() as Promise<MessageDoc>;
+
+    return message.save();
   }
 
   async saveEmoji(
@@ -111,23 +193,39 @@ export class MessagesService {
     to: string,
     emoji: string,
   ): Promise<MessageDoc> {
-    const m = new this.messageModel({
-      from,
-      to,
-      type: 'emoji',
-      text: emoji,
+    if (!emoji?.trim()) {
+      throw new BadRequestException('Emoji cannot be empty');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      type: MessageType.EMOJI,
+      text: emoji.trim(),
     });
-    return m.save() as Promise<MessageDoc>;
+
+    return message.save();
   }
 
   async saveGif(from: string, to: string, gifUrl: string): Promise<MessageDoc> {
-    const m = new this.messageModel({
-      from,
-      to,
-      type: 'gif',
-      text: gifUrl,
+    if (!gifUrl?.trim()) {
+      throw new BadRequestException('GIF URL cannot be empty');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      type: MessageType.GIF,
+      text: gifUrl.trim(),
     });
-    return m.save() as Promise<MessageDoc>;
+
+    return message.save();
   }
 
   async saveSticker(
@@ -135,13 +233,21 @@ export class MessagesService {
     to: string,
     stickerUrl: string,
   ): Promise<MessageDoc> {
-    const m = new this.messageModel({
-      from,
-      to,
-      type: 'sticker',
-      text: stickerUrl,
+    if (!stickerUrl?.trim()) {
+      throw new BadRequestException('Sticker URL cannot be empty');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      type: MessageType.STICKER,
+      text: stickerUrl.trim(),
     });
-    return m.save() as Promise<MessageDoc>;
+
+    return message.save();
   }
 
   async saveWebView(
@@ -151,16 +257,24 @@ export class MessagesService {
     title?: string,
     description?: string,
     imageUrl?: string,
-  ) {
-    const m = new this.messageModel({
-      from,
-      to,
-      type: 'webview',
-      webUrl: url,
-      webTitle: title,
-      webDescription: description,
-      webImageUrl: imageUrl,
+  ): Promise<MessageDoc> {
+    if (!url?.trim()) {
+      throw new BadRequestException('Web URL cannot be empty');
+    }
+
+    const fromId = new Types.ObjectId(from);
+    const toId = new Types.ObjectId(to);
+
+    const message = new this.messageModel({
+      from: fromId,
+      to: toId,
+      type: MessageType.WEBVIEW,
+      webUrl: url.trim(),
+      webTitle: title?.trim(),
+      webDescription: description?.trim(),
+      webImageUrl: imageUrl?.trim(),
     });
-    return m.save();
+
+    return message.save();
   }
 }

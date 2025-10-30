@@ -322,42 +322,60 @@ export class ChatGateway
     @MessageBody() payload: { id: string },
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
-    if (!fromUser) return;
+    try {
+      const fromUser = [...this.connected.values()].find(
+        (c) => c.socketId === client.id,
+      );
+      if (!fromUser) {
+        client.emit('error', { message: 'Unauthorized' });
+        return;
+      }
 
-    const msg = await this.messagesService.findById(payload.id);
-    if (!msg) return;
+      const msg = await this.messagesService.findById(payload.id);
+      if (!msg) {
+        client.emit('error', { message: 'Message not found' });
+        return;
+      }
 
-    // Allow both sender and receiver to delete the message
-    if (
-      String(msg.from) !== String(fromUser.userId) &&
-      String(msg.to) !== String(fromUser.userId)
-    )
-      return;
+      // Allow both sender and receiver to delete the message
+      const fromId =
+        typeof msg.from === 'string' ? msg.from : msg.from.toString();
+      const toId = typeof msg.to === 'string' ? msg.to : msg.to.toString();
 
-    // Mark the message as deleted
-    await this.messagesService.markDeleted(payload.id, fromUser.userId);
+      if (fromId !== fromUser.userId && toId !== fromUser.userId) {
+        client.emit('error', {
+          message: 'You can only delete your own messages',
+        });
+        return;
+      }
 
-    // If sender is deleting, notify both participants
-    if (String(msg.from) === String(fromUser.userId)) {
-      const toConn = this.connected.get(String(msg.to));
-      client.emit('message:deleted', {
-        id: payload.id,
-        deletedBy: fromUser.userId,
-      });
-      if (toConn) {
-        this.server.to(toConn.socketId).emit('message:deleted', {
+      // Mark the message as deleted
+      await this.messagesService.markDeleted(payload.id, fromUser.userId);
+
+      // If sender is deleting, notify both participants
+      if (fromId === fromUser.userId) {
+        const toConn = this.connected.get(toId);
+        client.emit('message:deleted', {
+          id: payload.id,
+          deletedBy: fromUser.userId,
+        });
+        if (toConn) {
+          this.server.to(toConn.socketId).emit('message:deleted', {
+            id: payload.id,
+            deletedBy: fromUser.userId,
+          });
+        }
+      } else {
+        // If receiver is deleting, only notify the receiver
+        client.emit('message:deleted', {
           id: payload.id,
           deletedBy: fromUser.userId,
         });
       }
-    } else {
-      // If receiver is deleting, only notify the receiver
-      client.emit('message:deleted', {
-        id: payload.id,
-        deletedBy: fromUser.userId,
+    } catch (error) {
+      client.emit('error', {
+        message:
+          error instanceof Error ? error.message : 'Failed to delete message',
       });
     }
   }
