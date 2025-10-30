@@ -6,6 +6,9 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { MessagesModule } from './messages/messages.module';
+import { GroupsModule } from './groups/groups.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { EncryptionModule } from './encryption/encryption.module';
 import { ChatGateway } from './chat.gateway';
 import { AuthModule } from './auth/auth.module';
 
@@ -29,6 +32,9 @@ import { AuthModule } from './auth/auth.module';
     }),
     UsersModule,
     MessagesModule,
+    GroupsModule,
+    NotificationsModule,
+    EncryptionModule,
     AuthModule,
   ],
   controllers: [AppController],

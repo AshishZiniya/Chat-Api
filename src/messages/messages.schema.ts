@@ -84,6 +84,27 @@ export class Message {
 
   @Prop()
   replyText?: string;
+
+  // Group messaging
+  @Prop({ type: Types.ObjectId, ref: 'Group' })
+  groupId?: Types.ObjectId;
+
+  // Encryption
+  @Prop()
+  encryptedContent?: string;
+
+  @Prop()
+  encryptionKey?: string;
+
+  @Prop()
+  iv?: string;
+
+  @Prop()
+  tag?: string;
+
+  // Message status for groups
+  @Prop({ type: Map, of: Boolean, default: {} })
+  readBy: Map<string, boolean>;
 }
 
 export const MessageSchema = SchemaFactory.createForClass(Message);

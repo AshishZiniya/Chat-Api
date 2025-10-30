@@ -12,6 +12,8 @@ import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
 import { UsersService } from './users/users.service';
 import { MessagesService } from './messages/messages.service';
+import { GroupsService } from './groups/groups.service';
+import { NotificationsService } from './notifications/notifications.service';
 import { Injectable } from '@nestjs/common';
 import { MessageDoc } from './messages/messages.schema';
 
@@ -33,6 +35,8 @@ export class ChatGateway
   constructor(
     private usersService: UsersService,
     private messagesService: MessagesService,
+    private groupsService: GroupsService,
+    private notificationsService: NotificationsService,
   ) {}
 
   afterInit(_server: Server) {
@@ -106,6 +110,19 @@ export class ChatGateway
         );
       }
 
+      // Send push notifications for any unread messages
+      try {
+        const unreadCount = await this.messagesService.getUnreadCountForUser(
+          String(userId),
+        );
+        if (unreadCount > 0) {
+          // TODO: Send push notification about unread messages
+          // This would require storing user push subscriptions
+        }
+      } catch (error) {
+        console.error('Error checking unread messages:', error);
+      }
+
       // Send any recent deletions that occurred while user was offline
       // This ensures multi-device synchronization
       try {
@@ -169,6 +186,7 @@ export class ChatGateway
       fileName?: string;
       fileSize?: number;
       fileType?: string;
+      groupId?: string;
     },
     @ConnectedSocket() client: Socket,
   ) {
@@ -186,6 +204,8 @@ export class ChatGateway
         fromUser.userId,
         payload.to,
         payload.text,
+        undefined,
+        payload.groupId,
       );
     } else if (type === 'emoji') {
       saved = await this.messagesService.saveEmoji(
@@ -220,6 +240,8 @@ export class ChatGateway
         fromUser.userId,
         payload.to,
         payload.text,
+        undefined,
+        payload.groupId,
       );
     }
 
@@ -234,6 +256,7 @@ export class ChatGateway
       fileName: payload.fileName,
       fileSize: payload.fileSize,
       fileType: payload.fileType,
+      groupId: payload.groupId,
       createdAt: saved.createdAt,
       avatar: fromUser.avatar,
       username: fromUser.username,
@@ -244,6 +267,26 @@ export class ChatGateway
     if (toConn) {
       this.server.to(toConn.socketId).emit('message', data);
       await this.messagesService.markDelivered([String(saved._id)]);
+    }
+
+    // If it's a group message, broadcast to all group members
+    if (payload.groupId) {
+      try {
+        const group = await this.groupsService.findById(payload.groupId);
+        if (group) {
+          // Send to all group members who are online
+          for (const memberId of group.members) {
+            const memberConn = this.connected.get(String(memberId));
+            if (memberConn && memberConn.socketId !== client.id) {
+              // Don't send to sender
+              this.server.to(memberConn.socketId).emit('message', data);
+              await this.messagesService.markDelivered([String(saved._id)]);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error broadcasting group message:', error);
+      }
     }
   }
 
@@ -354,6 +397,22 @@ export class ChatGateway
       payload.withUserId,
     );
     client.emit('conversation', conv);
+  }
+
+  @SubscribeMessage('get:group:conversation')
+  async handleGetGroupConversation(
+    @MessageBody() payload: { groupId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = [...this.connected.values()].find(
+      (c) => c.socketId === client.id,
+    );
+    if (!fromUser) return;
+    const conv = await this.messagesService.getGroupConversation(
+      payload.groupId,
+      fromUser.userId,
+    );
+    client.emit('group:conversation', conv);
   }
 
   @SubscribeMessage('delete:message')

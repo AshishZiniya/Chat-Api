@@ -6,11 +6,13 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Message, MessageDoc, MessageType } from './messages.schema';
+import { EncryptionService } from '../encryption/encryption.service';
 
 @Injectable()
 export class MessagesService {
   constructor(
     @InjectModel(Message.name) private messageModel: Model<MessageDoc>,
+    private encryptionService: EncryptionService,
   ) {}
 
   async save(
@@ -18,6 +20,8 @@ export class MessagesService {
     to: string,
     text: string,
     type: MessageType = MessageType.TEXT,
+    groupId?: string,
+    encrypt: boolean = false,
   ): Promise<MessageDoc> {
     if (!text?.trim()) {
       throw new BadRequestException('Message text cannot be empty');
@@ -26,13 +30,47 @@ export class MessagesService {
     const fromId = new Types.ObjectId(from);
     const toId = new Types.ObjectId(to);
 
-    const message = new this.messageModel({
+    let finalText = text.trim();
+    let encryptionData: {
+      encryptedContent: string;
+      encryptionKey: string;
+      iv: string;
+      tag: string;
+    } | null = null;
+
+    // Encrypt message if requested
+    if (encrypt) {
+      const sharedKey = this.encryptionService.deriveSharedKey(from, to);
+      const encrypted = this.encryptionService.encrypt(finalText, sharedKey);
+      finalText = encrypted.encrypted;
+      encryptionData = {
+        encryptedContent: finalText,
+        encryptionKey: sharedKey,
+        iv: encrypted.iv,
+        tag: encrypted.tag,
+      };
+      finalText = 'encrypted'; // Placeholder in text field
+    }
+
+    const messageData: Partial<MessageDoc> = {
       from: fromId,
       to: toId,
-      text: text.trim(),
+      text: finalText,
       type,
-    });
+    };
 
+    if (groupId) {
+      messageData.groupId = new Types.ObjectId(groupId);
+    }
+
+    if (encryptionData) {
+      messageData.encryptedContent = encryptionData.encryptedContent;
+      messageData.encryptionKey = encryptionData.encryptionKey;
+      messageData.iv = encryptionData.iv;
+      messageData.tag = encryptionData.tag;
+    }
+
+    const message = new this.messageModel(messageData);
     return message.save();
   }
 
@@ -82,6 +120,7 @@ export class MessagesService {
               { from: userB, to: userA },
             ],
           },
+          { groupId: { $exists: false } }, // Only direct messages, not group messages
           {
             deletedBy: { $nin: [userA] }, // Don't show messages deleted by the requesting user
           },
@@ -89,12 +128,36 @@ export class MessagesService {
       })
       .populate('from', 'username avatar online')
       .populate('to', 'username avatar online')
-      .populate('replyId', 'text type from createdAt')
+      .populate('replyTo', 'text type from createdAt')
       .sort({ createdAt: -1 }) // Get latest first for pagination
       .skip(skip)
       .limit(limit)
       .lean()
       .then((messages) => messages.reverse()); // Reverse to show chronological order
+  }
+
+  async getGroupConversation(
+    groupId: string,
+    userId: string,
+    limit: number = 50,
+    skip: number = 0,
+  ) {
+    const groupObjectId = new Types.ObjectId(groupId);
+    const userObjectId = new Types.ObjectId(userId);
+
+    return this.messageModel
+      .find({
+        groupId: groupObjectId,
+        deletedBy: { $nin: [userObjectId] }, // Don't show messages deleted by the requesting user
+      })
+      .populate('from', 'username avatar online')
+      .populate('replyTo', 'text type from createdAt')
+      .populate('groupId', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .then((messages) => messages.reverse());
   }
 
   async searchConversation(
@@ -339,5 +402,52 @@ export class MessagesService {
           deletedAt: msg.updatedAt,
         })),
       );
+  }
+
+  async getUnreadCountForUser(userId: string): Promise<number> {
+    const userObjectId = new Types.ObjectId(userId);
+
+    return this.messageModel
+      .countDocuments({
+        to: userObjectId,
+        seen: false,
+        deletedBy: { $nin: [userObjectId] },
+      })
+      .exec();
+  }
+
+  async decryptMessage(
+    messageId: string,
+    userId: string,
+  ): Promise<string | null> {
+    const message = await this.findById(messageId);
+    if (!message || !message.encryptedContent) {
+      return null;
+    }
+
+    // Verify user has access to this message
+    const fromId =
+      typeof message.from === 'string' ? message.from : message.from.toString();
+    const toId =
+      typeof message.to === 'string' ? message.to : message.to.toString();
+
+    if (fromId !== userId && toId !== userId) {
+      throw new BadRequestException('Access denied');
+    }
+
+    try {
+      const sharedKey = this.encryptionService.deriveSharedKey(fromId, toId);
+      // Note: In a real implementation, you'd need to store and retrieve IV and tag
+      // For now, this is a simplified version
+      return this.encryptionService.decrypt(
+        message.encryptedContent,
+        sharedKey,
+        message.iv || '',
+        message.tag || '',
+      );
+    } catch (error) {
+      console.error('Decryption error:', error);
+      return null;
+    }
   }
 }
