@@ -17,11 +17,80 @@ import { NotificationsService } from './notifications/notifications.service';
 import { Injectable } from '@nestjs/common';
 import { MessageDoc } from './messages/messages.schema';
 
-interface ConnectedUser {
+// Socket event schemas
+interface SocketUser {
   socketId: string;
   userId: string;
   username: string;
   avatar?: string;
+}
+
+interface TypingEvent {
+  to: string;
+  typing: boolean;
+}
+
+interface MessageEvent {
+  to: string;
+  text: string;
+  type?: 'text' | 'emoji' | 'gif' | 'sticker' | 'file' | 'location' | 'webview';
+  fileName?: string;
+  fileSize?: number;
+  fileType?: string;
+  groupId?: string;
+}
+
+interface LocationEvent {
+  to: string;
+  latitude: number;
+  longitude: number;
+  isLive?: boolean;
+}
+
+interface WebViewEvent {
+  to: string;
+  url: string;
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+}
+
+interface GetConversationEvent {
+  withUserId: string;
+}
+
+interface GetGroupConversationEvent {
+  groupId: string;
+}
+
+interface DeleteMessageEvent {
+  id: string;
+}
+
+interface MessageData {
+  _id: string;
+  from: string;
+  to: string;
+  type: string;
+  text?: string;
+  fileName?: string;
+  fileSize?: number;
+  fileType?: string;
+  groupId?: string;
+  createdAt: Date;
+  avatar?: string;
+  username: string;
+  latitude?: number;
+  longitude?: number;
+  isLive?: boolean;
+  webUrl?: string;
+  webTitle?: string;
+  webDescription?: string;
+  webImageUrl?: string;
+}
+
+interface ErrorEvent {
+  message: string;
 }
 
 @Injectable()
@@ -30,7 +99,7 @@ export class ChatGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   @WebSocketServer() server: Server;
-  private connected = new Map<string, ConnectedUser>(); // userId -> ConnectedUser
+  private connected = new Map<string, SocketUser>();
 
   constructor(
     private usersService: UsersService,
@@ -41,7 +110,6 @@ export class ChatGateway
 
   afterInit(_server: Server) {
     void _server;
-    // no-op
   }
 
   async handleConnection(client: Socket) {
@@ -84,7 +152,9 @@ export class ChatGateway
       await this.usersService.setOnline(userId, true);
 
       // broadcast updated user list
-      this.server.emit('users:updated', await this.usersService.listAll());
+      this.server.emit('users:updated', {
+        users: await this.usersService.listAll(),
+      });
 
       // deliver pending messages
       const pending = await this.messagesService.getPendingFor(String(userId));
@@ -124,7 +194,6 @@ export class ChatGateway
       }
 
       // Send any recent deletions that occurred while user was offline
-      // This ensures multi-device synchronization
       try {
         const recentDeletions =
           await this.messagesService.getRecentDeletionsForUser(String(userId));
@@ -139,7 +208,6 @@ export class ChatGateway
         }
       } catch (error) {
         console.error('Error sending recent deletions:', error);
-        // Continue with connection - don't fail the entire connection
       }
     } catch {
       client.disconnect(true);
@@ -152,7 +220,9 @@ export class ChatGateway
       if (info.socketId === client.id) {
         this.connected.delete(userId);
         await this.usersService.setOnline(userId, false);
-        this.server.emit('users:updated', await this.usersService.listAll());
+        this.server.emit('users:updated', {
+          users: await this.usersService.listAll(),
+        });
         break;
       }
     }
@@ -160,7 +230,7 @@ export class ChatGateway
 
   @SubscribeMessage('typing')
   handleTyping(
-    @MessageBody() payload: { to: string; typing: boolean },
+    @MessageBody() payload: TypingEvent,
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -178,16 +248,7 @@ export class ChatGateway
 
   @SubscribeMessage('message')
   async handleMessage(
-    @MessageBody()
-    payload: {
-      to: string;
-      text: string;
-      type?: string;
-      fileName?: string;
-      fileSize?: number;
-      fileType?: string;
-      groupId?: string;
-    },
+    @MessageBody() payload: MessageEvent,
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -197,6 +258,21 @@ export class ChatGateway
 
     let saved: MessageDoc;
     const type = payload.type || 'text';
+
+    // Validate message type
+    const validTypes = [
+      'text',
+      'emoji',
+      'gif',
+      'sticker',
+      'file',
+      'location',
+      'webview',
+    ];
+    if (!validTypes.includes(type)) {
+      client.emit('error', { message: 'Invalid message type' });
+      return;
+    }
 
     // store message based on type
     if (type === 'text') {
@@ -247,8 +323,8 @@ export class ChatGateway
 
     // send to receiver if online
     const toConn = this.connected.get(payload.to);
-    const data = {
-      _id: saved?._id,
+    const data: MessageData = {
+      _id: String(saved?._id),
       from: fromUser.userId,
       to: payload.to,
       type,
@@ -292,13 +368,7 @@ export class ChatGateway
 
   @SubscribeMessage('location')
   async handleLocation(
-    @MessageBody()
-    payload: {
-      to: string;
-      latitude: number;
-      longitude: number;
-      isLive?: boolean;
-    },
+    @MessageBody() payload: LocationEvent,
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -315,8 +385,8 @@ export class ChatGateway
     );
 
     const toConn = this.connected.get(payload.to);
-    const data = {
-      _id: saved._id,
+    const data: MessageData = {
+      _id: String(saved._id),
       from: fromUser.userId,
       to: payload.to,
       type: 'location',
@@ -337,14 +407,7 @@ export class ChatGateway
 
   @SubscribeMessage('webview')
   async handleWebView(
-    @MessageBody()
-    payload: {
-      to: string;
-      url: string;
-      title?: string;
-      description?: string;
-      imageUrl?: string;
-    },
+    @MessageBody() payload: WebViewEvent,
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -362,8 +425,8 @@ export class ChatGateway
     );
 
     const toConn = this.connected.get(payload.to);
-    const data = {
-      _id: saved._id,
+    const data: MessageData = {
+      _id: String(saved._id),
       from: fromUser.userId,
       to: payload.to,
       type: 'webview',
@@ -385,7 +448,7 @@ export class ChatGateway
 
   @SubscribeMessage('get:conversation')
   async handleGetConversation(
-    @MessageBody() payload: { withUserId: string },
+    @MessageBody() payload: GetConversationEvent,
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -401,7 +464,7 @@ export class ChatGateway
 
   @SubscribeMessage('get:group:conversation')
   async handleGetGroupConversation(
-    @MessageBody() payload: { groupId: string },
+    @MessageBody() payload: GetGroupConversationEvent,
     @ConnectedSocket() client: Socket,
   ) {
     const fromUser = [...this.connected.values()].find(
@@ -417,7 +480,7 @@ export class ChatGateway
 
   @SubscribeMessage('delete:message')
   async handleDeleteMessage(
-    @MessageBody() payload: { id: string },
+    @MessageBody() payload: DeleteMessageEvent,
     @ConnectedSocket() client: Socket,
   ) {
     try {
@@ -451,7 +514,6 @@ export class ChatGateway
       await this.messagesService.markDeleted(payload.id, fromUser.userId);
 
       // Broadcast deletion to ALL connected clients in the conversation
-      // Find all connected clients that are part of this conversation
       const conversationParticipants = [fromId, toId];
 
       for (const participantId of conversationParticipants) {
@@ -460,7 +522,7 @@ export class ChatGateway
           this.server.to(participantConn.socketId).emit('message:deleted', {
             id: payload.id,
             deletedBy: fromUser.userId,
-            conversationId: `${fromId}-${toId}`, // Include conversation identifier
+            conversationId: `${fromId}-${toId}`,
           });
         }
       }

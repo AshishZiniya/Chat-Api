@@ -80,7 +80,7 @@ export class Message {
 
   // Reply functionality
   @Prop({ type: Types.ObjectId, ref: 'Message' })
-  _id?: Types.ObjectId;
+  replyTo?: Types.ObjectId;
 
   @Prop()
   replyText?: string;
