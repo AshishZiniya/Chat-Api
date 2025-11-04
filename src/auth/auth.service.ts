@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import * as jwt from 'jsonwebtoken';
+import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class AuthService {
@@ -27,7 +28,6 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const bcrypt = await import('bcryptjs');
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
 
@@ -46,17 +46,30 @@ export class AuthService {
       idString = String(user._id);
     }
 
+    await this.usersService.setOnline(idString, true);
+
     // Validate username is a string before including it in the token
     const usernameStr = typeof user.username === 'string' ? user.username : '';
 
-    const token = jwt.sign(
+    const accessToken = jwt.sign(
       { sub: idString, username: usernameStr },
       process.env.JWT_SECRET || 'dev_secret',
+      { expiresIn: '15m' },
+    );
+
+    const refreshToken = jwt.sign(
+      { sub: idString },
+      process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret',
       { expiresIn: '7d' },
     );
 
+    // Store refresh token hash in database
+    const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
+    await this.usersService.updateRefreshToken(idString, refreshTokenHash);
+
     return {
-      accessToken: token,
+      accessToken,
+      refreshToken,
       user: { _id: idString, username: usernameStr, avatar: user.avatar },
     };
   }
@@ -93,14 +106,77 @@ export class AuthService {
     } else {
       idString = String(user._id);
     }
-    const token = jwt.sign(
+    const accessToken = jwt.sign(
       { sub: idString, username: user.username },
       process.env.JWT_SECRET || 'dev_secret',
+      { expiresIn: '15m' },
+    );
+
+    const refreshToken = jwt.sign(
+      { sub: idString },
+      process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret',
       { expiresIn: '7d' },
     );
+
+    // Store refresh token hash in database
+    const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
+    await this.usersService.updateRefreshToken(idString, refreshTokenHash);
+
     return {
-      accessToken: token,
+      accessToken,
+      refreshToken,
       user: { _id: idString, username: user.username, avatar: user.avatar },
     };
+  }
+
+  async refreshToken(refreshToken: string) {
+    try {
+      const payload = jwt.verify(
+        refreshToken,
+        process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret',
+      ) as { sub: string };
+
+      const userId = payload.sub;
+      const isValid = await this.usersService.validateRefreshToken(
+        userId,
+        refreshToken,
+      );
+      if (!isValid) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
+      const user = await this.usersService.findById(userId);
+      if (!user) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      const newAccessToken = jwt.sign(
+        { sub: userId, username: user.username },
+        process.env.JWT_SECRET || 'dev_secret',
+        { expiresIn: '15m' },
+      );
+
+      const newRefreshToken = jwt.sign(
+        { sub: userId },
+        process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret',
+        { expiresIn: '7d' },
+      );
+
+      // Update refresh token in database
+      const newRefreshTokenHash = await bcrypt.hash(newRefreshToken, 10);
+      await this.usersService.updateRefreshToken(userId, newRefreshTokenHash);
+
+      return {
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      };
+    } catch (error) {
+      console.error('Refresh token error:', error);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+  }
+
+  async logout(userId: string) {
+    await this.usersService.removeRefreshToken(userId);
   }
 }

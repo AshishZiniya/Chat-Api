@@ -94,12 +94,18 @@ interface ErrorEvent {
 }
 
 @Injectable()
-@WebSocketGateway({ cors: { origin: '*', credentials: true } })
+@WebSocketGateway({
+  cors: { origin: '*', credentials: true },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
+})
 export class ChatGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   @WebSocketServer() server: Server;
-  private connected = new Map<string, SocketUser>();
+  private connected = new Map<string, SocketUser[]>();
+  private readonly maxConnectionsPerUser = 5; // Limit concurrent connections per user
 
   constructor(
     private usersService: UsersService,
@@ -143,12 +149,22 @@ export class ChatGateway
         return;
       }
 
-      this.connected.set(String(userId), {
+      const userSockets = this.connected.get(String(userId)) || [];
+
+      // Limit concurrent connections per user
+      if (userSockets.length >= this.maxConnectionsPerUser) {
+        client.emit('error', { message: 'Maximum connections exceeded' });
+        client.disconnect(true);
+        return;
+      }
+
+      userSockets.push({
         socketId: client.id,
         userId: String(userId),
         username: user.username,
         avatar: user.avatar,
       });
+      this.connected.set(String(userId), userSockets);
       await this.usersService.setOnline(userId, true);
 
       // broadcast updated user list
@@ -215,16 +231,28 @@ export class ChatGateway
   }
 
   async handleDisconnect(client: Socket) {
-    // find user by socket
-    for (const [userId, info] of this.connected.entries()) {
-      if (info.socketId === client.id) {
-        this.connected.delete(userId);
-        await this.usersService.setOnline(userId, false);
-        this.server.emit('users:updated', {
-          users: await this.usersService.listAll(),
-        });
-        break;
+    try {
+      // find user by socket
+      for (const [userId, userSockets] of this.connected.entries()) {
+        const socketIndex = userSockets.findIndex(
+          (socket) => socket.socketId === client.id,
+        );
+        if (socketIndex !== -1) {
+          userSockets.splice(socketIndex, 1);
+          if (userSockets.length === 0) {
+            this.connected.delete(userId);
+            await this.usersService.setOnline(userId, false);
+            this.server.emit('users:updated', {
+              users: await this.usersService.listAll(),
+            });
+          } else {
+            this.connected.set(userId, userSockets);
+          }
+          break;
+        }
       }
+    } catch (error) {
+      console.error('Error handling disconnect:', error);
     }
   }
 
@@ -233,17 +261,19 @@ export class ChatGateway
     @MessageBody() payload: TypingEvent,
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
     if (!fromUser) return;
     const toConn = this.connected.get(payload.to);
-    if (toConn)
-      this.server.to(toConn.socketId).emit('typing', {
-        from: fromUser.userId,
-        username: fromUser.username,
-        typing: payload.typing,
-      });
+    if (toConn && toConn.length > 0)
+      toConn.forEach((conn) =>
+        this.server.to(conn.socketId).emit('typing', {
+          from: fromUser.userId,
+          username: fromUser.username,
+          typing: payload.typing,
+        }),
+      );
   }
 
   @SubscribeMessage('message')
@@ -251,118 +281,132 @@ export class ChatGateway
     @MessageBody() payload: MessageEvent,
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
-    if (!fromUser) return;
+    try {
+      const fromUser = Array.from(this.connected.values())
+        .flat()
+        .find((c) => c.socketId === client.id);
+      if (!fromUser) {
+        client.emit('error', { message: 'Unauthorized' });
+        return;
+      }
 
-    let saved: MessageDoc;
-    const type = payload.type || 'text';
+      let saved: MessageDoc;
+      const type = payload.type || 'text';
 
-    // Validate message type
-    const validTypes = [
-      'text',
-      'emoji',
-      'gif',
-      'sticker',
-      'file',
-      'location',
-      'webview',
-    ];
-    if (!validTypes.includes(type)) {
-      client.emit('error', { message: 'Invalid message type' });
-      return;
-    }
+      // Validate message type
+      const validTypes = [
+        'text',
+        'emoji',
+        'gif',
+        'sticker',
+        'file',
+        'location',
+        'webview',
+      ];
+      if (!validTypes.includes(type)) {
+        client.emit('error', { message: 'Invalid message type' });
+        return;
+      }
 
-    // store message based on type
-    if (type === 'text') {
-      saved = await this.messagesService.save(
-        fromUser.userId,
-        payload.to,
-        payload.text,
-        undefined,
-        payload.groupId,
-      );
-    } else if (type === 'emoji') {
-      saved = await this.messagesService.saveEmoji(
-        fromUser.userId,
-        payload.to,
-        payload.text,
-      );
-    } else if (type === 'gif') {
-      saved = await this.messagesService.saveGif(
-        fromUser.userId,
-        payload.to,
-        payload.text,
-      );
-    } else if (type === 'sticker') {
-      saved = await this.messagesService.saveSticker(
-        fromUser.userId,
-        payload.to,
-        payload.text,
-      );
-    } else if (type === 'file') {
-      saved = await this.messagesService.saveFile(
-        fromUser.userId,
-        payload.to,
-        payload.text, // fileUrl
-        payload.fileName || 'file',
-        payload.fileSize || 0,
-        payload.fileType || 'application/octet-stream',
-      );
-    } else {
-      // For other types, save as text for now
-      saved = await this.messagesService.save(
-        fromUser.userId,
-        payload.to,
-        payload.text,
-        undefined,
-        payload.groupId,
-      );
-    }
+      // store message based on type
+      if (type === 'text') {
+        saved = await this.messagesService.save(
+          fromUser.userId,
+          payload.to,
+          payload.text,
+          undefined,
+          payload.groupId,
+        );
+      } else if (type === 'emoji') {
+        saved = await this.messagesService.saveEmoji(
+          fromUser.userId,
+          payload.to,
+          payload.text,
+        );
+      } else if (type === 'gif') {
+        saved = await this.messagesService.saveGif(
+          fromUser.userId,
+          payload.to,
+          payload.text,
+        );
+      } else if (type === 'sticker') {
+        saved = await this.messagesService.saveSticker(
+          fromUser.userId,
+          payload.to,
+          payload.text,
+        );
+      } else if (type === 'file') {
+        saved = await this.messagesService.saveFile(
+          fromUser.userId,
+          payload.to,
+          payload.text, // fileUrl
+          payload.fileName || 'file',
+          payload.fileSize || 0,
+          payload.fileType || 'application/octet-stream',
+        );
+      } else {
+        // For other types, save as text for now
+        saved = await this.messagesService.save(
+          fromUser.userId,
+          payload.to,
+          payload.text,
+          undefined,
+          payload.groupId,
+        );
+      }
 
-    // send to receiver if online
-    const toConn = this.connected.get(payload.to);
-    const data: MessageData = {
-      _id: String(saved?._id),
-      from: fromUser.userId,
-      to: payload.to,
-      type,
-      text: payload.text,
-      fileName: payload.fileName,
-      fileSize: payload.fileSize,
-      fileType: payload.fileType,
-      groupId: payload.groupId,
-      createdAt: saved.createdAt,
-      avatar: fromUser.avatar,
-      username: fromUser.username,
-    };
+      // send to receiver if online
+      const toConn = this.connected.get(payload.to);
+      const data: MessageData = {
+        _id: String(saved?._id),
+        from: fromUser.userId,
+        to: payload.to,
+        type,
+        text: payload.text,
+        fileName: payload.fileName,
+        fileSize: payload.fileSize,
+        fileType: payload.fileType,
+        groupId: payload.groupId,
+        createdAt: saved.createdAt,
+        avatar: fromUser.avatar,
+        username: fromUser.username,
+      };
 
-    // emit to both: sender and receiver
-    client.emit('message', data);
-    if (toConn) {
-      this.server.to(toConn.socketId).emit('message', data);
-      await this.messagesService.markDelivered([String(saved._id)]);
-    }
+      // emit to both: sender and receiver
+      client.emit('message', data);
+      if (toConn && toConn.length > 0) {
+        toConn.forEach((conn) => {
+          this.server.to(conn.socketId).emit('message', data);
+        });
+        await this.messagesService.markDelivered([String(saved._id)]);
+      }
 
-    // If it's a group message, broadcast to all group members
-    if (payload.groupId) {
-      try {
-        const group = await this.groupsService.findById(payload.groupId);
-        if (group) {
-          // Send to all group members who are online
-          for (const memberId of group.members) {
-            const memberConn = this.connected.get(String(memberId));
-            if (memberConn && memberConn.socketId !== client.id) {
-              // Don't send to sender
-              this.server.to(memberConn.socketId).emit('message', data);
-              await this.messagesService.markDelivered([String(saved._id)]);
+      // If it's a group message, broadcast to all group members
+      if (payload.groupId) {
+        try {
+          const group = await this.groupsService.findById(payload.groupId);
+          if (group) {
+            // Send to all group members who are online
+            for (const memberId of group.members) {
+              const memberConns = this.connected.get(String(memberId));
+              if (memberConns && memberConns.length > 0) {
+                memberConns.forEach((conn) => {
+                  if (conn.socketId !== client.id) {
+                    // Don't send to sender
+                    this.server.to(conn.socketId).emit('message', data);
+                  }
+                });
+                await this.messagesService.markDelivered([String(saved._id)]);
+              }
             }
           }
+        } catch (error) {
+          console.error('Error broadcasting group message:', error);
         }
-      } catch (error) {
-        console.error('Error broadcasting group message:', error);
       }
+    } catch (error) {
+      console.error('Error handling message:', error);
+      client.emit('error', { message: 'Failed to send message' });
     }
   }
 
@@ -371,9 +415,9 @@ export class ChatGateway
     @MessageBody() payload: LocationEvent,
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
     if (!fromUser) return;
 
     const saved = await this.messagesService.saveLocation(
@@ -399,8 +443,10 @@ export class ChatGateway
     };
 
     client.emit('message', data);
-    if (toConn) {
-      this.server.to(toConn.socketId).emit('message', data);
+    if (toConn && toConn.length > 0) {
+      toConn.forEach((conn) => {
+        this.server.to(conn.socketId).emit('message', data);
+      });
       await this.messagesService.markDelivered([String(saved._id)]);
     }
   }
@@ -410,9 +456,9 @@ export class ChatGateway
     @MessageBody() payload: WebViewEvent,
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
     if (!fromUser) return;
 
     const saved = await this.messagesService.saveWebView(
@@ -440,8 +486,10 @@ export class ChatGateway
     };
 
     client.emit('message', data);
-    if (toConn) {
-      this.server.to(toConn.socketId).emit('message', data);
+    if (toConn && toConn.length > 0) {
+      toConn.forEach((conn) => {
+        this.server.to(conn.socketId).emit('message', data);
+      });
       await this.messagesService.markDelivered([String(saved._id)]);
     }
   }
@@ -451,9 +499,9 @@ export class ChatGateway
     @MessageBody() payload: GetConversationEvent,
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
     if (!fromUser) return;
     const conv = await this.messagesService.getConversation(
       fromUser.userId,
@@ -467,9 +515,9 @@ export class ChatGateway
     @MessageBody() payload: GetGroupConversationEvent,
     @ConnectedSocket() client: Socket,
   ) {
-    const fromUser = [...this.connected.values()].find(
-      (c) => c.socketId === client.id,
-    );
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
     if (!fromUser) return;
     const conv = await this.messagesService.getGroupConversation(
       payload.groupId,
@@ -478,15 +526,61 @@ export class ChatGateway
     client.emit('group:conversation', conv);
   }
 
+  @SubscribeMessage('userOnline')
+  async handleUserOnline(
+    @MessageBody() payload: { userId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
+    if (!fromUser || fromUser.userId !== payload.userId) return;
+
+    // Update user status in database
+    await this.usersService.setOnline(payload.userId, true);
+
+    // Broadcast to all connected clients except sender
+    client.broadcast.emit('userStatusUpdate', {
+      userId: payload.userId,
+      online: true,
+    });
+  }
+
+  @SubscribeMessage('userOffline')
+  async handleUserOffline(
+    @MessageBody() payload: { userId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const fromUser = Array.from(this.connected.values())
+      .flat()
+      .find((c) => c.socketId === client.id);
+    if (!fromUser || fromUser.userId !== payload.userId) return;
+
+    // Update user status in database
+    await this.usersService.setOnline(payload.userId, false);
+
+    // Broadcast to all connected clients except sender
+    client.broadcast.emit('userStatusUpdate', {
+      userId: payload.userId,
+      online: false,
+    });
+  }
+
+  @SubscribeMessage('user:heartbeat')
+  handleHeartbeat(@MessageBody() payload: { userId: string }) {
+    // Heartbeat to keep user online status - no action needed, just acknowledge
+    console.log('Heartbeat received from user:', payload.userId);
+  }
+
   @SubscribeMessage('delete:message')
   async handleDeleteMessage(
     @MessageBody() payload: DeleteMessageEvent,
     @ConnectedSocket() client: Socket,
   ) {
     try {
-      const fromUser = [...this.connected.values()].find(
-        (c) => c.socketId === client.id,
-      );
+      const fromUser = Array.from(this.connected.values())
+        .flat()
+        .find((c) => c.socketId === client.id);
       if (!fromUser) {
         client.emit('error', { message: 'Unauthorized' });
         return;
@@ -517,12 +611,14 @@ export class ChatGateway
       const conversationParticipants = [fromId, toId];
 
       for (const participantId of conversationParticipants) {
-        const participantConn = this.connected.get(participantId);
-        if (participantConn) {
-          this.server.to(participantConn.socketId).emit('message:deleted', {
-            id: payload.id,
-            deletedBy: fromUser.userId,
-            conversationId: `${fromId}-${toId}`,
+        const participantConns = this.connected.get(participantId);
+        if (participantConns && participantConns.length > 0) {
+          participantConns.forEach((conn) => {
+            this.server.to(conn.socketId).emit('message:deleted', {
+              id: payload.id,
+              deletedBy: fromUser.userId,
+              conversationId: `${fromId}-${toId}`,
+            });
           });
         }
       }

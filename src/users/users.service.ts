@@ -38,6 +38,24 @@ export class UsersService {
       .exec();
   }
 
+  async updateRefreshToken(userId: string, refreshTokenHash: string) {
+    return this.userModel
+      .updateOne({ _id: userId }, { $set: { refreshToken: refreshTokenHash } })
+      .exec();
+  }
+
+  async validateRefreshToken(userId: string, refreshToken: string) {
+    const user = await this.userModel.findById(userId).lean();
+    if (!user || !user.refreshToken) return false;
+    return bcrypt.compare(refreshToken, user.refreshToken);
+  }
+
+  async removeRefreshToken(userId: string) {
+    return this.userModel
+      .updateOne({ _id: userId }, { $unset: { refreshToken: 1 } })
+      .exec();
+  }
+
   listAll() {
     return this.userModel.find().lean();
   }

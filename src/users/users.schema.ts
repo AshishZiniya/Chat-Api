@@ -33,6 +33,12 @@ export class User {
 
   @Prop({ default: Date.now })
   lastSeen: Date;
+
+  @Prop()
+  accessToken?: string;
+
+  @Prop()
+  refreshToken?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

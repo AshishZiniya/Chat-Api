@@ -17,6 +17,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (typeof data.sub !== 'string' || typeof data.username !== 'string') {
       throw new Error('Invalid JWT payload');
     }
-    return { userId: data.sub, username: data.username };
+    return {
+      userId: data.sub,
+      username: data.username,
+      iat: payload.iat,
+      exp: payload.exp,
+    };
   }
 }

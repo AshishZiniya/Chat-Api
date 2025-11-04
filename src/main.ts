@@ -10,6 +10,8 @@ async function bootstrap() {
   app.use(cookieParser());
   const origins = [
     'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:10000',
     'https://chat-app-beta-two-12.vercel.app',
   ];
   if (process.env.FRONTEND_URL) {
