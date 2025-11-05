@@ -172,6 +172,12 @@ export class ChatGateway
         users: await this.usersService.listAll(),
       });
 
+      // Emit online status to all clients
+      this.server.emit('userStatusUpdate', {
+        userId: String(userId),
+        online: true,
+      });
+
       // deliver pending messages
       const pending = await this.messagesService.getPendingFor(String(userId));
       if (pending.length) {
@@ -244,6 +250,11 @@ export class ChatGateway
             await this.usersService.setOnline(userId, false);
             this.server.emit('users:updated', {
               users: await this.usersService.listAll(),
+            });
+            // Emit offline status to all clients
+            this.server.emit('userStatusUpdate', {
+              userId,
+              online: false,
             });
           } else {
             this.connected.set(userId, userSockets);
@@ -539,8 +550,8 @@ export class ChatGateway
     // Update user status in database
     await this.usersService.setOnline(payload.userId, true);
 
-    // Broadcast to all connected clients except sender
-    client.broadcast.emit('userStatusUpdate', {
+    // Notify ALL clients, including sender
+    this.server.emit('userStatusUpdate', {
       userId: payload.userId,
       online: true,
     });
@@ -559,8 +570,8 @@ export class ChatGateway
     // Update user status in database
     await this.usersService.setOnline(payload.userId, false);
 
-    // Broadcast to all connected clients except sender
-    client.broadcast.emit('userStatusUpdate', {
+    // Notify ALL clients, including sender
+    this.server.emit('userStatusUpdate', {
       userId: payload.userId,
       online: false,
     });
