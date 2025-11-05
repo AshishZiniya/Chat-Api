@@ -46,8 +46,6 @@ export class AuthService {
       idString = String(user._id);
     }
 
-    await this.usersService.setOnline(idString, true);
-
     // Validate username is a string before including it in the token
     const usernameStr = typeof user.username === 'string' ? user.username : '';
 
