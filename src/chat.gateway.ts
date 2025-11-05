@@ -158,6 +158,7 @@ export class ChatGateway
         return;
       }
 
+      const existingConnections = userSockets.length;
       userSockets.push({
         socketId: client.id,
         userId: String(userId),
@@ -165,18 +166,30 @@ export class ChatGateway
         avatar: user.avatar,
       });
       this.connected.set(String(userId), userSockets);
-      await this.usersService.setOnline(userId, true);
 
-      // broadcast updated user list
-      this.server.emit('users:updated', {
-        users: await this.usersService.listAll(),
-      });
+      // Only set online and broadcast if this is the first connection for this user
+      if (existingConnections === 0) {
+        await this.usersService.setOnline(userId, true);
 
-      // Emit online status to all clients
-      this.server.emit('userStatusUpdate', {
-        userId: String(userId),
-        online: true,
-      });
+        // broadcast updated user list
+        this.server.emit('users:updated', {
+          users: await this.usersService.listAll(),
+        });
+
+        // Emit online status to all clients (including the connecting user)
+        this.server.emit('userStatusUpdate', {
+          userId: String(userId),
+          online: true,
+        });
+
+        console.log(
+          `User ${user.username} (${userId}) first connection - set online`,
+        );
+      } else {
+        console.log(
+          `User ${user.username} (${userId}) additional connection (${userSockets.length} total)`,
+        );
+      }
 
       // deliver pending messages
       const pending = await this.messagesService.getPendingFor(String(userId));
@@ -244,6 +257,11 @@ export class ChatGateway
           (socket) => socket.socketId === client.id,
         );
         if (socketIndex !== -1) {
+          const remainingConnections = userSockets.length - 1;
+          console.log(
+            `User ${userId} socket ${client.id} disconnected. Remaining connections: ${remainingConnections}`,
+          );
+
           userSockets.splice(socketIndex, 1);
           if (userSockets.length === 0) {
             this.connected.delete(userId);
@@ -256,8 +274,13 @@ export class ChatGateway
               userId,
               online: false,
             });
+
+            console.log(`User ${userId} fully disconnected and set offline`);
           } else {
             this.connected.set(userId, userSockets);
+            console.log(
+              `User ${userId} still has ${userSockets.length} active connections`,
+            );
           }
           break;
         }
@@ -537,50 +560,14 @@ export class ChatGateway
     client.emit('group:conversation', conv);
   }
 
-  @SubscribeMessage('userOnline')
-  async handleUserOnline(
-    @MessageBody() payload: { userId: string },
-    @ConnectedSocket() client: Socket,
-  ) {
-    const fromUser = Array.from(this.connected.values())
-      .flat()
-      .find((c) => c.socketId === client.id);
-    if (!fromUser || fromUser.userId !== payload.userId) return;
-
-    // Update user status in database
-    await this.usersService.setOnline(payload.userId, true);
-
-    // Notify ALL clients, including sender
-    this.server.emit('userStatusUpdate', {
-      userId: payload.userId,
-      online: true,
-    });
-  }
-
-  @SubscribeMessage('userOffline')
-  async handleUserOffline(
-    @MessageBody() payload: { userId: string },
-    @ConnectedSocket() client: Socket,
-  ) {
-    const fromUser = Array.from(this.connected.values())
-      .flat()
-      .find((c) => c.socketId === client.id);
-    if (!fromUser || fromUser.userId !== payload.userId) return;
-
-    // Update user status in database
-    await this.usersService.setOnline(payload.userId, false);
-
-    // Notify ALL clients, including sender
-    this.server.emit('userStatusUpdate', {
-      userId: payload.userId,
-      online: false,
-    });
-  }
+  // These methods are now handled automatically by handleConnection/handleDisconnect
+  // Keeping them for backward compatibility but they won't be called by frontend anymore
 
   @SubscribeMessage('user:heartbeat')
   handleHeartbeat(@MessageBody() payload: { userId: string }) {
-    // Heartbeat to keep user online status - no action needed, just acknowledge
+    // Heartbeat to keep user online status - update last seen time
     console.log('Heartbeat received from user:', payload.userId);
+    // Note: We could update lastSeen here if needed, but for now just acknowledge
   }
 
   @SubscribeMessage('delete:message')
